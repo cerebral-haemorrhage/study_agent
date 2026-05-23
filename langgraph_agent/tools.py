@@ -27,7 +27,7 @@
          不需要字符串解析！
 """
 from langchain_core.tools import tool
-
+from datetime import datetime
 # ———— 天气数据库（和手搓版一模一样） ————
 WEATHER_DB = {
     "北京": "晴天，25°C，湿度40%",
@@ -66,10 +66,18 @@ def get_weather(city: str) -> str:
     # 从数据库里查，没查到就返回提示
     return WEATHER_DB.get(city, f"未找到「{city}」的天气数据，请检查城市名称。")
 
+@tool
+def get_time()-> str:
+    """
+    获取当前时间。
+    Args:
+        None
+    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ———— 工具列表 ————
 # 把所有工具放进一个列表。
 # 以后想加新工具（比如 get_time、search_web），
 # 只需要写一个新函数 + @tool + 加进这个列表就行，
 # 完全不需要改 graph.py！
-TOOLS = [get_weather]
+TOOLS = [get_weather, get_time]

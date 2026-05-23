@@ -28,6 +28,8 @@ from langchain_core.messages import HumanMessage
 # 手搓版里是 {"role": "user", "content": "..."}
 # 框架版里是 HumanMessage(content="...")
 
+from .tools import TOOLS
+
 
 def main():
     # ———— 1. 根据参数选择模式 ————
@@ -48,7 +50,9 @@ def main():
 
     # ———— 3. 打印欢迎信息 ————
     print("🤖 LangGraph Agent 启动！（输入 quit 退出）")
-    print(f"   支持的工具: 城市天气查询 (get_weather)")
+    print("   支持的工具:")
+    for tool in TOOLS:
+        print(f"     - {tool.name}: {tool.description.splitlines()[0]}")
     if not quiet:
         print(f"   模式: 调试模式（逐步打印每一步）")
     print()

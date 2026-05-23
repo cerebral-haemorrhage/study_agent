@@ -60,9 +60,11 @@
   一张图对应手搓版的 react_loop() 整个函数
 ================================================================================
 """
-from typing import Literal
-from langgraph.graph import StateGraph, END          # StateGraph=图, END=结束标记
-from typing_extensions import TypedDict               # TypedDict=定义"字典里只能有什么字段"
+from typing import Literal, Annotated
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages      # 消息自动合并，不会覆盖
+from langgraph.checkpoint.memory import MemorySaver
+from typing_extensions import TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage
 
 from .config import llm                                # 前面配置好的 DeepSeek 客户端
@@ -81,22 +83,12 @@ from .tools import TOOLS                               # 工具列表 [get_weath
 #   手搓版: react_memory = ""  (字符串拼消息)
 #           ConversationMemory.messages = []  (列表存消息)
 #   框架版: AgentState.messages = []  (统一成一个有类型的列表)
+# Annotated[list, add_messages] 的意思是：
+#   "messages 是一个列表，但更新时请不要覆盖，请把新消息追加到末尾"
+# 没有这个注解 → 新消息会把旧消息整个替换掉 → SystemMessage 和 HumanMessage 消失
+# 有了这个注解 → 新消息自动追加 → 历史不会丢
 class AgentState(TypedDict):
-    """
-    AgentState 就是图的"对话记忆"。
-
-    整张图在运行过程中，AgentState 这个字典会在各个节点之间传来传去。
-    每个节点都可以读取它、修改它。
-
-    比如:
-      agent_node 从 state["messages"] 读取历史对话
-      agent_node 返回 {"messages": [新消息]}  ← LangGraph 自动把新消息追加到列表末尾
-      tools_node 从 state["messages"][-1] 读取 LLM 要调的工具
-    """
-    # messages 字段：所有对话消息的列表
-    # 里面存的是 LangChain 的 Message 对象，不是普通字符串
-    # 比如: [SystemMessage("你是助手"), HumanMessage("北京天气"), AIMessage("..."), ...]
-    messages: list[BaseMessage]
+    messages: Annotated[list[BaseMessage], add_messages]
 
 
 # ============================================================
@@ -156,26 +148,31 @@ def agent_node(state: AgentState) -> dict:
       不用字符串解析！
     """
     # 取出当前所有消息
-    messages = state["messages"]
+    MAX_MESSAGES = 6   # 设小一点方便观察裁剪效果
+    messages = list(state["messages"])
 
-    # 确保第一条消息是 system prompt（告诉 LLM 它是谁、可以做什么）
-    # 这和手搓版一样: chat_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if not messages or messages[0].type != "system":
-        # 如果还没有 system 消息，在最前面插入一条
-        messages = [
-            SystemMessage(content="你是一个智能助手。你可以使用工具来帮助用户。请逐步思考并回答用户问题。"),
-        ] + list(messages)
+    # 记忆窗口：只保留最近 N 条，但从前面裁剪
+    # 注意：不能简单 messages[-N:]，可能把 ToolMessage 的配对 AIMessage 切掉
+    # 这里从前面开始裁剪，保证 ToolMessage 前面一定有对应的 AIMessage(tool_calls)
+    while len(messages) > MAX_MESSAGES:
+        # 如果第1条是 ToolMessage，那第0条被裁剪了但不能丢（它是 AIMessage(tool_calls)）
+        # 所以多留一条
+        if len(messages) > 1 and messages[1].type == "tool":
+            break  # 不能再裁了
+        messages.pop(0)  # 从头部删除最旧的消息
 
-    # 调用 LLM  —— 这里才是真正"发消息给 DeepSeek"
-    # llm_with_tools.invoke(messages) 背后实际做了:
-    #   1. 把 messages 列表转成 API 请求格式
-    #   2. 把工具列表的 JSON Schema 也塞进请求
-    #   3. 发送 HTTP 请求到 DeepSeek
-    #   4. 接收回复，包装成 AIMessage 对象返回
+    # 如果消息列表里还没有 SystemMessage，在最前面加一条
+    has_system = any(m.type == "system" for m in messages)
+    if not has_system:
+        messages = [SystemMessage(
+            content="你是一个智能助手。你可以使用工具来帮助用户。请逐步思考并回答用户问题。"
+        )] + messages
+
+    # 调用 LLM
+    print(f"    📨 实际发给 LLM 的消息: {len(messages)} 条 (窗口={MAX_MESSAGES})")
     response = llm_with_tools.invoke(messages)
 
-    # 返回值: 告诉 LangGraph "请把这行消息追加到 state['messages'] 里"
-    # 注意: 返回的是 {"messages": [一条消息]}，LangGraph 会自动合并到列表末尾
+    # 只返回 AI 消息，SystemMessage 不写入 state（避免重复出现）
     return {"messages": [response]}
 
 
@@ -362,10 +359,9 @@ def build_graph():
     # 这就是 ReAct 的 "A"(Act 执行) → 回到 "R"(Reason 思考)
     graph.add_edge("tools", "agent")
 
-    # ———— 第6步: 编译图 ————
-    # compile() 把蓝图变成可执行对象
-    # 这一步 LangGraph 内部会做很多检查:
-    #   有没有从入口出发永远到不了的节点？
-    #   有没有回环？
-    #   等等
-    return graph.compile()
+    # ———— 第6步: 编译图 + 装记忆 ————
+    # compile(checkpointer=MemorySaver()) 做了什么:
+    #   MemorySaver 就是一个"对话记忆本"，把每次 invoke 后的 messages 存下来
+    #   下次 invoke 时，同一个 thread_id 的消息自动恢复，不需要手动传历史
+    #   对应手搓版的 ConversationMemory，但不用手动 append 了
+    return graph.compile(checkpointer=MemorySaver())

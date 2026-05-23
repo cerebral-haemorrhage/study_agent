@@ -13,7 +13,7 @@ def main():
 
     while True:
         try:
-            user_input = input("\n👤 你: ").strip()
+            user_input: str = input("\n👤 你: ").strip()
             if not user_input:
                 continue
             if user_input.lower() in ("quit", "exit", "q"):
@@ -21,7 +21,7 @@ def main():
                 break
 
             print("\n🤖 Agent 思考中...")
-            answer = react_loop(user_input, memory, verbose=True)
+            answer: str = react_loop(user_input, memory, verbose=True)
             print(f"\n🤖 最终回答: {answer}")
 
         except KeyboardInterrupt:

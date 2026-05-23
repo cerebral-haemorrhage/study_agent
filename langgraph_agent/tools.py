@@ -39,6 +39,11 @@ WEATHER_DB = {
     "西安": "晴天，27°C，湿度35%",
     "武汉": "多云，29°C，湿度60%",
 }
+WEATHER_DB_FALLBACK = {
+    "北京": "晴天，25°C，湿度40%",
+    "上海": "多云，28°C，湿度65%",
+    "深圳": "阵雨，30°C，湿度80%",    
+}
 
 
 # ———— 定义工具 ————
@@ -64,7 +69,17 @@ def get_weather(city: str) -> str:
         city: 城市名称，如"北京"、"上海"
     """
     # 从数据库里查，没查到就返回提示
-    return WEATHER_DB.get(city, f"未找到「{city}」的天气数据，请检查城市名称。")
+    if not city or not city.strip():
+        return "请提供城市名，例如：北京、上海"
+    res = WEATHER_DB.get(city)
+    if res:
+        return res
+    else:
+        res = WEATHER_DB_FALLBACK.get(city)
+        if res:
+            return res
+        else:
+            return f"未找到「{city}」的天气数据，请检查城市名称。"
 
 @tool
 def get_time()-> str:
@@ -75,9 +90,30 @@ def get_time()-> str:
     """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+
+@tool
+def calculate(expression:str):
+    """
+    安全地计算数学表达式
+    Args:
+        expression: 数学表达式，如"1+1"、"2*3"、"1/0"
+    """
+    # 只允许数字、运算符、空格和小数点
+    allowed = set('0123456789+-*/().%^ ')
+    if not set(expression).issubset(allowed):
+        raise ValueError("表达式包含无效字符")
+    
+    # 替换 ^ 为 ** （支持幂运算）
+    expression = expression.replace('^', '**')
+    try:
+        res = eval(expression)
+        return res
+    except Exception as e:
+        return f"计算失败: {e}"
+
 # ———— 工具列表 ————
 # 把所有工具放进一个列表。
 # 以后想加新工具（比如 get_time、search_web），
 # 只需要写一个新函数 + @tool + 加进这个列表就行，
 # 完全不需要改 graph.py！
-TOOLS = [get_weather, get_time]
+TOOLS = [get_weather, get_time, calculate]
